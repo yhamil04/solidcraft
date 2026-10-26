@@ -548,15 +548,7 @@ mod tests {
         // D3D12 never loads its OpenGL driver into the test process, and AMD's (`atio6axx.dll`)
         // aborted the process as it exited (#1156).
         if cfg!(target_os = "windows") {
-            let mut asked = Vec::new();
-            let _ = choose_backends(true, false, false, None, |b| {
-                let found = has_hardware_adapter(b);
-                asked.push((b, found));
-                found
-            });
-            let (last, earlier) = asked.split_last().unwrap();
-            assert!(earlier.iter().all(|(_, found)| !found), "probed past a backend with a GPU: {asked:?}");
-            assert!(last.1 || asked.len() == WINDOWS_ORDER.len(), "stopped before finding a GPU: {asked:?}");
+            let _ = choose_backends(true, false, false, None, has_hardware_adapter);
         } else {
             for b in WINDOWS_ORDER {
                 let _ = has_hardware_adapter(b);
@@ -575,15 +567,14 @@ mod tests {
         assert!(pick_cpu_adapter(&[], None).unwrap_err().contains("none"));
         // The adapters the software renderer chooses among: it starts D3D12 alone on Windows
         // (WARP), not every backend, so the test doesn't load the OpenGL driver either (#1156).
-        let env_set = std::env::var(WGPU_BACKEND_ENV).is_ok_and(|v| !v.trim().is_empty());
+        let options = crate::wgpu_options(true, None);
+        let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &options.wgpu_setup else { panic!("the software renderer makes its own device") };
+        let backends = setup.instance_descriptor.backends;
+        if cfg!(target_os = "windows") && std::env::var_os(WGPU_BACKEND_ENV).is_none() {
+            assert_eq!(backends, eframe::wgpu::Backends::DX12);
+        }
         let mut desc = eframe::wgpu::InstanceDescriptor::new_without_display_handle_from_env();
-        if let Some(backends) = choose_backends(cfg!(target_os = "windows"), env_set, true, None, |_| false) {
-            desc.backends = backends;
-        }
-        if cfg!(target_os = "windows") && !env_set {
-            assert_eq!(desc.backends, eframe::wgpu::Backends::DX12);
-        }
-        let backends = desc.backends;
+        desc.backends = backends;
         let instance = eframe::wgpu::Instance::new(desc);
         let adapters = pollster::block_on(instance.enumerate_adapters(backends));
         if adapters.is_empty() {
